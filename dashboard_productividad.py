@@ -1,79 +1,91 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.inspection import permutation_importance
-import time
+import seaborn as sns
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
 
-# --- Carga de datos ---
-df = pd.read_csv('demo_productividad_maquinas.csv')
+st.set_page_config(page_title="Demo Productividad Tejido Circular", layout="wide")
 
-# --- Encabezado del dashboard ---
-st.set_page_config(page_title="Dashboard de Productividad", layout="wide")
-st.title("🔮 Simulador de Productividad por IA")
-st.caption("Predicción semanal para máquinas circulares")
-st.markdown("---")
+st.title("📈 Dashboard de Productividad - Tejido Circular")
 
-# --- Filtros ---
-semana_seleccionada = st.selectbox("Selecciona una semana para predecir", sorted(df['Semana'].unique()))
-maquina_seleccionada = st.selectbox("Selecciona la máquina", sorted(df['Máquina'].unique()))
+# Cargar datos
+@st.cache_data
 
-# --- Preparar los datos ---
-campos_modelo = [
+def load_data():
+    df = pd.read_csv("demo_productividad_maquinas.csv", parse_dates=['Fecha inicio', 'Fecha fin'])
+    return df
+
+df = load_data()
+
+# Procesar columnas
+cat_cols = ['Tripulación', 'Máquina', 'Mezcla', 'Proveedor']
+le_dict = {}
+for col in cat_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    le_dict[col] = le
+
+# Calcular productividad
+
+df['MIN_TOTALES'] = (df['Fecha fin'] - df['Fecha inicio']).dt.total_seconds() / 60
+
+df['MIN_NO_PRODUCTIVOS'] = (
+    df['PARO SIN MOTIVO MATRIX'] + df['PAROS SIN MOTIVO MÁQUINA'] +
+    df['MIN CAMBIO PLATINAS'] + df['MIN MANTTO RUTINA'] + df['MIN CALIDAD'] +
+    df['MIN MANTTO PROGRAMADO'] + df['MIN OTROS PAROS'] +
+    df['MIN LIMPIEZA ESTRUCTURA'] + df['MIN LIMPIEZA MALLAS'] +
+    df['MIN CORRECTIVO OPERADOR'] + df['MIN CORRECTIVO MÁQUINA'] +
+    df['MIN CAIDA CARDIGAN OPERADOR'] + df['MIN CAIDA CARDIGAN MÁQUINA'] +
+    df['MIN CAIDA CARDIGAN M. PRIMA'] + df['MIN CAIDA TELA']
+)
+df['MIN_PRODUCTIVOS'] = df['MIN_TOTALES'] - df['MIN_NO_PRODUCTIVOS']
+df['MIN_PRODUCTIVOS'] = df['MIN_PRODUCTIVOS'].apply(lambda x: max(x, 1))
+df['Productividad'] = (df['Fin vueltas'] - df['Inicio vueltas']) / df['MIN_PRODUCTIVOS']
+
+# Modelo de predicción
+features = [
+    'Tripulación', 'Semana', 'Máquina', 'Calibre', 'Mezcla', 'Proveedor',
     'DISPAROS', 'HOYOS', 'MALLAS',
-    'MINUTOS RUTINAS DE MANTENIMIENTO',
-    'MINUTOS DE MANTENIMIENTO CORRECTIVO DE OPERADOR',
-    'MINUTOS DE MANTENIMIENTO CORRECTIVO DE MÁQUINA',
-    'MINUTOS DE LIMPIEZA DE MALLAS',
-    'MINUTOS CAÍDA DE TELA CARDIGAN POR MÁQUINA'
+    'PARO SIN MOTIVO MATRIX', 'PAROS SIN MOTIVO MÁQUINA', 'CAMBIO DE AGUJAS',
+    'MIN CAMBIO PLATINAS', 'MIN MANTTO RUTINA', 'MIN CALIDAD', 'MIN MANTTO PROGRAMADO',
+    'MIN OTROS PAROS', 'MIN LIMPIEZA ESTRUCTURA', 'MIN LIMPIEZA MALLAS',
+    'MIN CORRECTIVO OPERADOR', 'MIN CORRECTIVO MÁQUINA',
+    'MIN CAIDA CARDIGAN OPERADOR', 'MIN CAIDA CARDIGAN MÁQUINA',
+    'MIN CAIDA CARDIGAN M. PRIMA', 'MIN CAIDA TELA'
 ]
 
-df_modelo = df[df['Máquina'] == maquina_seleccionada]
-X = df_modelo[campos_modelo]
-y = df_modelo['ProductividadReal']
+X = df[features]
+y = df['Productividad']
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X, y)
+df['Predicción'] = model.predict(X)
 
-# --- Entrenamiento del modelo ---
-modelo = LinearRegression()
-modelo.fit(X, y)
+# Filtros
+with st.sidebar:
+    semana_sel = st.multiselect("Filtrar por semana:", options=sorted(df['Semana'].unique()), default=sorted(df['Semana'].unique()))
+    maquina_sel = st.multiselect("Filtrar por máquina:", options=sorted(df['Máquina'].unique()), default=sorted(df['Máquina'].unique()))
 
-# --- Predicción de la semana seleccionada ---
-df_pred = df_modelo[df_modelo['Semana'] == semana_seleccionada]
-X_pred = df_pred[campos_modelo]
+filtro = df[df['Semana'].isin(semana_sel) & df['Máquina'].isin(maquina_sel)]
 
-# Spinner para mostrar que el modelo está trabajando
-with st.spinner('🤖 Generando predicción con IA...'):
-    time.sleep(1.5)
-    if not X_pred.empty:
-        prediccion = modelo.predict(X_pred).mean()
-        st.success(f"📈 Predicción de productividad para la semana {semana_seleccionada}: **{prediccion:.2f}** unidades")
-    else:
-        st.warning("No hay datos para la semana seleccionada.")
-        prediccion = None
+# Gráficos
+st.subheader("📊 Productividad real vs estimada")
+fig, ax = plt.subplots(figsize=(12, 5))
+sns.lineplot(data=filtro, x='Semana', y='Productividad', label='Real', ax=ax)
+sns.lineplot(data=filtro, x='Semana', y='Predicción', label='Predicción', ax=ax)
+plt.ylabel("Vueltas por minuto útil")
+st.pyplot(fig)
+
+st.subheader("🏆 Ranking de productividad por máquina")
+ranking = filtro.groupby('Máquina')['Productividad'].mean().sort_values(ascending=False)
+st.bar_chart(ranking)
+
+st.subheader("📈 Importancia de características")
+importances = model.feature_importances_
+importancia_df = pd.Series(importances, index=features).sort_values(ascending=True)
+fig2, ax2 = plt.subplots(figsize=(10, 8))
+importancia_df.tail(10).plot(kind='barh', ax=ax2)
+st.pyplot(fig2)
 
 st.markdown("---")
-
-# --- Gráfica de comparación ---
-if prediccion:
-    fig, ax = plt.subplots()
-    ax.plot(df_modelo['Semana'], df_modelo['ProductividadReal'], marker='o', label='Real')
-    ax.axhline(y=prediccion, color='orange', linestyle='--', label='Predicción IA')
-    ax.set_xlabel("Semana")
-    ax.set_ylabel("Productividad")
-    ax.set_title(f"📊 Comparativa de Productividad - Máquina {maquina_seleccionada}")
-    ax.legend()
-    st.pyplot(fig)
-
-# --- Importancia de variables ---
-st.markdown("### 🧠 Variables que más afectan la predicción")
-importancias = permutation_importance(modelo, X, y, n_repeats=5, random_state=42)
-importancia_df = pd.DataFrame({
-    'Variable': X.columns,
-    'Importancia': importancias.importances_mean
-}).sort_values(by='Importancia', ascending=False)
-
-st.bar_chart(importancia_df.set_index('Variable'))
-
-# --- Footer ---
-st.markdown("---")
-st.caption("Desarrollado por Inteligenccia © 2025")
+st.markdown("Desarrollado para demo con datos sintéticos inteligenccia.com - Tejido Circular")
