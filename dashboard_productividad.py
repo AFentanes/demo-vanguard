@@ -5,9 +5,9 @@ import seaborn as sns
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
-st.set_page_config(page_title="Demo Productividad Vanguard", layout="wide")
+st.set_page_config(page_title="Demo Productividad Tejido Circular", layout="wide")
 
-st.title("📈 Dashboard de Productividad - Vanguard Pai Lung")
+st.title("📈 Dashboard de Productividad - Tejido Circular")
 
 # Cargar datos
 @st.cache_data
@@ -88,4 +88,4 @@ importancia_df.tail(10).plot(kind='barh', ax=ax2)
 st.pyplot(fig2)
 
 st.markdown("---")
-st.markdown("Desarrollado para demo con datos sintéticos - Vanguard Pai Lung")
+st.markdown("Desarrollado para demo con datos sintéticos inteligenccia.com - Tejido Circular")
